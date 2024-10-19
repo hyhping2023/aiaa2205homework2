@@ -1,4 +1,4 @@
-import torch
+import torch, logging
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
@@ -13,6 +13,26 @@ from functools import reduce, lru_cache
 from operator import mul
 from einops import rearrange
 
+
+# def get_root_logger(log_file=None, log_level=logging.INFO):
+#     """Use ``get_logger`` method in mmcv to get the root logger.
+
+#     The logger will be initialized if it has not been initialized. By default a
+#     StreamHandler will be added. If ``log_file`` is specified, a FileHandler
+#     will also be added. The name of the root logger is the top-level package
+#     name, e.g., "mmaction".
+
+#     Args:
+#         log_file (str | None): The log filename. If specified, a FileHandler
+#             will be added to the root logger.
+#         log_level (int): The root logger level. Note that only the process of
+#             rank 0 is affected, while other processes will set the level to
+#             "Error" and be silent most of the time.
+
+#     Returns:
+#         :obj:`logging.Logger`: The root logger.
+#     """
+#     return get_logger(__name__.split('.')[0], log_file, log_level)
 
 class Mlp(nn.Module):
     """ Multilayer perceptron."""
@@ -455,7 +475,7 @@ class PatchEmbed3D(nn.Module):
 
         return x
 
-@BACKBONES.register_module()
+# @BACKBONES.register_module()
 class SwinTransformer3D(nn.Module):
     """ Swin Transformer backbone.
         A PyTorch impl of : `Swin Transformer: Hierarchical Vision Transformer using Shifted Windows`  -
@@ -498,7 +518,8 @@ class SwinTransformer3D(nn.Module):
                  norm_layer=nn.LayerNorm,
                  patch_norm=False,
                  frozen_stages=-1,
-                 use_checkpoint=False):
+                 use_checkpoint=False,
+                 num_classes=10):
         super().__init__()
 
         self.pretrained = pretrained
@@ -543,6 +564,9 @@ class SwinTransformer3D(nn.Module):
 
         # add a norm layer for each output
         self.norm = norm_layer(self.num_features)
+
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.head = nn.Linear(self.num_features, num_classes) if num_classes > 0 else nn.Identity()
 
         self._freeze_stages()
 
@@ -631,17 +655,17 @@ class SwinTransformer3D(nn.Module):
 
         if pretrained:
             self.pretrained = pretrained
-        if isinstance(self.pretrained, str):
-            self.apply(_init_weights)
-            logger = get_root_logger()
-            logger.info(f'load model from: {self.pretrained}')
+        # if isinstance(self.pretrained, str):
+        #     self.apply(_init_weights)
+        #     logger = get_root_logger()
+        #     logger.info(f'load model from: {self.pretrained}')
 
-            if self.pretrained2d:
-                # Inflate 2D model into 3D model.
-                self.inflate_weights(logger)
-            else:
-                # Directly load 3D model.
-                load_checkpoint(self, self.pretrained, strict=False, logger=logger)
+        #     if self.pretrained2d:
+        #         # Inflate 2D model into 3D model.
+        #         self.inflate_weights(logger)
+        #     # else:
+        #     #     # Directly load 3D model.
+        #     #     load_checkpoint(self, self.pretrained, strict=False, logger=logger)
         elif self.pretrained is None:
             self.apply(_init_weights)
         else:
@@ -659,6 +683,17 @@ class SwinTransformer3D(nn.Module):
         x = rearrange(x, 'n c d h w -> n d h w c')
         x = self.norm(x)
         x = rearrange(x, 'n d h w c -> n c d h w')
+
+        x = x[:, :, -1, :, :].contiguous()
+
+        # print(x.shape)
+        x = self.avgpool(x)
+
+        # print(x.shape)
+        x = torch.flatten(x, 1)
+        # print(x.shape)
+
+        x = self.head(x)
 
         return x
 
